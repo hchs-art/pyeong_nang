@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import confetti from "canvas-confetti";
 import { pickRandom, shuffleList } from "../utils/random";
 
@@ -13,7 +13,10 @@ export function ResultDisplay({ participants, onUpdate }: ResultDisplayProps) {
     const [isDrawing, setIsDrawing] = useState(false);
     const [result, setResult] = useState<string[] | null>(null);
     const [mode, setMode] = useState<"pick" | "shuffle" | null>(null);
+
+    // Slot machine animation states
     const [rollingNames, setRollingNames] = useState<string[]>([]);
+    const [startRoll, setStartRoll] = useState(false);
 
     // Calculate the names for the slot machine
     useEffect(() => {
@@ -21,10 +24,22 @@ export function ResultDisplay({ participants, onUpdate }: ResultDisplayProps) {
             // Create a long list of random names to scroll through
             const slots = [];
             const numSlots = 40; // Total names to roll past before stopping
-            for (let i = 0; i < numSlots; i++) {
+            for (let i = 0; i < numSlots - 1; i++) {
                 slots.push(participants[Math.floor(Math.random() * participants.length)]);
             }
             setRollingNames(slots);
+
+            // Reset position first
+            setStartRoll(false);
+
+            // Trigger the CSS transition animation in the next frames
+            const frame1 = requestAnimationFrame(() => {
+                const frame2 = requestAnimationFrame(() => {
+                    setStartRoll(true);
+                });
+                return () => cancelAnimationFrame(frame2);
+            });
+            return () => cancelAnimationFrame(frame1);
         }
     }, [isDrawing, mode, participants]);
 
@@ -66,6 +81,7 @@ export function ResultDisplay({ participants, onUpdate }: ResultDisplayProps) {
             const picked = pickRandom(participants, 1);
             setResult(picked);
             setIsDrawing(false);
+            setStartRoll(false);
             fireConfetti();
         }, 3000);
     };
@@ -119,18 +135,17 @@ export function ResultDisplay({ participants, onUpdate }: ResultDisplayProps) {
                         {mode === "pick" ? (
                             <>
                                 <div
-                                    className="flex flex-col items-center absolute w-full transition-transform"
+                                    className="flex flex-col items-center w-full absolute top-0"
                                     style={{
-                                        // Calculate transform to scroll through the full list and stop at the end
-                                        // We animate from top to bottom over 3 seconds with ease-out
-                                        transform: `translateY(calc(-100% + 120px))`,
-                                        animation: "slotMachineRoll 3s cubic-bezier(0.1, 0.7, 0.1, 1) forwards"
+                                        // Use standard CSS transitions instead of keyframes to ensure it works across all setups
+                                        transform: startRoll ? `translateY(calc(-100% + 120px))` : `translateY(0px)`,
+                                        transition: startRoll ? "transform 3s cubic-bezier(0.1, 0.7, 0.1, 1)" : "none"
                                     }}
                                 >
                                     {rollingNames.map((name, i) => (
                                         <div
                                             key={i}
-                                            className="h-[120px] flex items-center justify-center w-full text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400"
+                                            className="h-[120px] flex items-center justify-center w-full text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400 shrink-0"
                                         >
                                             {name}
                                         </div>
@@ -193,17 +208,6 @@ export function ResultDisplay({ participants, onUpdate }: ResultDisplayProps) {
                     </p>
                 )}
             </div>
-
-            <style jsx>{`
-        @keyframes slotMachineRoll {
-          0% {
-            transform: translateY(0);
-          }
-          100% {
-            transform: translateY(calc(-100% + 120px));
-          }
-        }
-      `}</style>
         </div>
     );
 }
