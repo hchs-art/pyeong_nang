@@ -1,10 +1,15 @@
 "use client";
 
+import { Suspense } from "react";
 import { useParticipants } from "../hooks/useParticipants";
 import { InputSection } from "../components/InputSection";
 import { ResultDisplay } from "../components/ResultDisplay";
 
-export default function Home() {
+// Required for Cloudflare Pages when using useSearchParams in Next.js 14+ 
+// to prevent it from trying to statically generate the page at build time.
+export const dynamic = 'force-dynamic';
+
+function AppContent() {
   const { isMounted, participants, updateParticipants } = useParticipants();
 
   if (!isMounted) {
@@ -36,5 +41,17 @@ export default function Home() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-zinc-50 dark:bg-black flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      </div>
+    }>
+      <AppContent />
+    </Suspense>
   );
 }

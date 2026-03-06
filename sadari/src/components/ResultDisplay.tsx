@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import confetti from "canvas-confetti";
 import { pickRandom, shuffleList } from "../utils/random";
 
@@ -13,6 +13,20 @@ export function ResultDisplay({ participants, onUpdate }: ResultDisplayProps) {
     const [isDrawing, setIsDrawing] = useState(false);
     const [result, setResult] = useState<string[] | null>(null);
     const [mode, setMode] = useState<"pick" | "shuffle" | null>(null);
+    const [rollingNames, setRollingNames] = useState<string[]>([]);
+
+    // Calculate the names for the slot machine
+    useEffect(() => {
+        if (isDrawing && mode === "pick" && participants.length > 0) {
+            // Create a long list of random names to scroll through
+            const slots = [];
+            const numSlots = 40; // Total names to roll past before stopping
+            for (let i = 0; i < numSlots; i++) {
+                slots.push(participants[Math.floor(Math.random() * participants.length)]);
+            }
+            setRollingNames(slots);
+        }
+    }, [isDrawing, mode, participants]);
 
     const fireConfetti = () => {
         const duration = 3000;
@@ -47,13 +61,13 @@ export function ResultDisplay({ participants, onUpdate }: ResultDisplayProps) {
         setIsDrawing(true);
         setResult(null);
 
-        // Simulate drawing animation time with rolling effect
+        // After 3 seconds of CSS slot machine animation, show result
         setTimeout(() => {
             const picked = pickRandom(participants, 1);
             setResult(picked);
             setIsDrawing(false);
             fireConfetti();
-        }, 2000);
+        }, 3000);
     };
 
     const handleShuffle = () => {
@@ -101,11 +115,38 @@ export function ResultDisplay({ participants, onUpdate }: ResultDisplayProps) {
 
             <div className="mt-8 min-h-[200px] flex items-center justify-center p-8 rounded-3xl bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 relative overflow-hidden">
                 {isDrawing ? (
-                    <div className="flex flex-col items-center gap-4 animate-in fade-in duration-300">
-                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-                        <p className="text-zinc-500 dark:text-zinc-400 font-medium">
-                            {mode === "pick" ? "추첨 중입니다..." : "섞는 중입니다..."}
-                        </p>
+                    <div className="flex flex-col items-center justify-center w-full h-[120px] relative overflow-hidden rounded-xl bg-white dark:bg-zinc-800 shadow-inner border border-zinc-200 dark:border-zinc-700">
+                        {mode === "pick" ? (
+                            <>
+                                <div
+                                    className="flex flex-col items-center absolute w-full transition-transform"
+                                    style={{
+                                        // Calculate transform to scroll through the full list and stop at the end
+                                        // We animate from top to bottom over 3 seconds with ease-out
+                                        transform: `translateY(calc(-100% + 120px))`,
+                                        animation: "slotMachineRoll 3s cubic-bezier(0.1, 0.7, 0.1, 1) forwards"
+                                    }}
+                                >
+                                    {rollingNames.map((name, i) => (
+                                        <div
+                                            key={i}
+                                            className="h-[120px] flex items-center justify-center w-full text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400"
+                                        >
+                                            {name}
+                                        </div>
+                                    ))}
+                                </div>
+                                {/* Visual slot machine overlay (shadows) */}
+                                <div className="absolute inset-0 pointer-events-none shadow-[inset_0_20px_20px_rgba(0,0,0,0.05),inset_0_-20px_20px_rgba(0,0,0,0.05)] dark:shadow-[inset_0_20px_20px_rgba(0,0,0,0.4),inset_0_-20px_20px_rgba(0,0,0,0.4)]"></div>
+                                {/* Center marker line */}
+                                <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-blue-500/20 w-full -translate-y-1/2"></div>
+                            </>
+                        ) : (
+                            <div className="flex flex-col items-center gap-4">
+                                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+                                <p className="text-zinc-500 dark:text-zinc-400 font-medium">섞는 중입니다...</p>
+                            </div>
+                        )}
                     </div>
                 ) : result ? (
                     <div className="w-full h-full flex flex-col items-center animate-in fade-in zoom-in duration-500">
@@ -115,8 +156,10 @@ export function ResultDisplay({ participants, onUpdate }: ResultDisplayProps) {
 
                         {mode === "pick" ? (
                             <div className="flex flex-col items-center">
-                                <div className="text-5xl md:text-7xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600 drop-shadow-sm py-4 tracking-tight">
-                                    {result[0]}
+                                <div className="w-full h-[120px] flex items-center justify-center px-12 rounded-xl bg-white dark:bg-zinc-800 shadow-lg border-2 border-blue-400 dark:border-blue-600 relative overflow-hidden">
+                                    <div className="text-5xl md:text-7xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600 drop-shadow-sm tracking-tight animate-bounce">
+                                        {result[0]}
+                                    </div>
                                 </div>
                                 <button
                                     onClick={handleExclude}
@@ -150,6 +193,17 @@ export function ResultDisplay({ participants, onUpdate }: ResultDisplayProps) {
                     </p>
                 )}
             </div>
+
+            <style jsx>{`
+        @keyframes slotMachineRoll {
+          0% {
+            transform: translateY(0);
+          }
+          100% {
+            transform: translateY(calc(-100% + 120px));
+          }
+        }
+      `}</style>
         </div>
     );
 }
