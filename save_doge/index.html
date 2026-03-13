@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Save the Doge</title>
+    <style>
+        body,
+        html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+        }
+
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+    </style>
+    <!-- Load Phaser 3 -->
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+</head>
+
+<body>
+    <div id="game-container"></div>
+    <script>
+        // Constants
+        const LINE_THICKNESS = 12;
+        const MIN_DRAW_DISTANCE_SQ = 200;
+        const BEE_SPAWN_INTERVAL = 300;
+        const MAX_BEES = 10;
+        const COUNTDOWN_SECONDS = 10;
+
+        class GameScene extends Phaser.Scene {
+            constructor() {
+                super({ key: 'GameScene' });
+                this.isDrawing = false;
+                this.drawPoints = [];
+                this.graphics = null;
+                this.wallBody = null;
+
+                this.gameState = 'DRAWING'; // DRAWING, PLAYING, WON, LOST
+                this.timeLeft = COUNTDOWN_SECONDS;
+                this.bees = [];
+                this.timerEvent = null;
+                this.beeSpawnEvent = null;
+            }
+
+            preload() {
+                this.load.image('background', 'assets/background.png');
+                this.load.image('dog_idle', 'assets/dog_idle.png');
+                this.load.image('dog_hurt', 'assets/dog_hurt.png');
+                this.load.image('hive', 'assets/hive.png');
+                this.load.image('bee', 'assets/bee.png');
+            }
+
+            create() {
+                const width = this.scale.width;
+                const height = this.scale.height;
+
+                // Setup physics bounds
+                this.matter.world.setBounds(0, 0, width, height + 500, 50, true, true, false, true); // No bottom wall, but dog shouldn't fall usually
+
+                // Background
+                this.add.image(width / 2, height / 2, 'background').setDisplaySize(width, height);
+
+                // Add static floor just in case
+                this.floor = this.matter.add.rectangle(width / 2, height - 20, width * 2, 40, {
+                    isStatic: true,
+                    label: 'floor',
+                    friction: 0.8
+                });
+
+                // Dog
+                this.dog = this.matter.add.image(width / 2, height - 150, 'dog_idle');
+                this.dog.setScale(0.1); // Scale down to 10%
+
+                // Adjust circle collision body radius to match the new scale
+                const dogRad = Math.min(this.dog.width, this.dog.height) / 2 * 0.1 * 0.8;
+                this.dog.setCircle(dogRad, {
+                    label: 'dog',
+                    restitution: 0.1,
+                    friction: 0.5,
+                    density: 0.005
+                });
+
+                // Hive
+                this.hive = this.matter.add.image(width / 2, 100, 'hive', null, { isStatic: true, label: 'hive' });
+                // Make hive scale similar to the dog and bee
+                this.hive.setScale(0.1);
+
+                // Drawing Graphics
+                this.graphics = this.add.graphics({ lineStyle: { width: LINE_THICKNESS, color: 0x222222, cap: 'round', join: 'round' } });
+
+                // UI
+                this.timerText = this.add.text(width / 2, 80, '', {
+                    fontSize: '48px',
+                    fontFamily: 'Arial',
+                    color: '#ffffff',
+                    stroke: '#000000',
+                    strokeThickness: 5,
+                    fontStyle: 'bold'
+                }).setOrigin(0.5);
+
+                this.messageText = this.add.text(width / 2, height / 2, 'Draw a line to protect the dog!', {
+                    fontSize: '32px',
+                    fontFamily: 'Arial',
+                    color: '#ffdd00',
+                    stroke: '#000000',
+                    strokeThickness: 5,
+                    align: 'center'
+                }).setOrigin(0.5);
+
+                // Enable click to restart
+                this.time.delayedCall(1000, () => {
+                    this.input.enabled = true;
+                    this.input.once('pointerdown', () => {
+                        this.cleanupScene();
+                        this.scene.restart();
+                    });
+                });
+
+                // Also ensure cleanup on manual restarts just in case
+                this.events.on('shutdown', this.cleanupScene, this);
+            }
+
+            cleanupScene() {
+                if (this.graphics) {
+                    this.graphics.clear();
+                }
+                if (this.wallBody) {
+                    this.matter.world.remove(this.wallBody);
+                    this.wallBody = null;
+                }
+                this.bees.forEach(b => {
+                    if (b && b.active) b.destroy();
+                });
+                this.bees = [];
+                this.drawPoints = [];
+                this.isDrawing = false;
+            }
+
+            onPointerDown(pointer) {
+                this.input.on('pointermove', this.onPointerMove, this);
+                this.input.on('pointerup', this.onPointerUp, this);
+
+                // Collision Event
+                this.matter.world.on('collisionstart', this.handleCollisions, this);
+            }
+
+            onPointerDown(pointer) {
+                if (this.gameState !== 'DRAWING') return;
+
+                this.isDrawing = true;
+                this.drawPoints = [{ x: pointer.x, y: pointer.y }];
+                this.graphics.clear();
+
+                // Hide message
+                this.messageText.setVisible(false);
+            }
+
+            onPointerMove(pointer) {
+                if (!this.isDrawing || this.gameState !== 'DRAWING') return;
+
+                const lastPoint = this.drawPoints[this.drawPoints.length - 1];
+                const dx = pointer.x - lastPoint.x;
+                const dy = pointer.y - lastPoint.y;
+                const distSq = dx * dx + dy * dy;
+
+                if (distSq > MIN_DRAW_DISTANCE_SQ) {
+                    this.drawPoints.push({ x: pointer.x, y: pointer.y });
+                    this.redrawLine();
+                }
+            }
+
+            onPointerUp() {
+                if (!this.isDrawing || this.gameState !== 'DRAWING') return;
+
+                this.isDrawing = false;
+
+                if (this.drawPoints.length > 2) {
+                    this.createWallBody();
+                    this.startGame();
+                } else {
+                    // Too short, clear
+                    this.graphics.clear();
+                    this.drawPoints = [];
+                    this.messageText.setText('Line too short!').setVisible(true);
+                }
+            }
+
+            redrawLine() {
+                this.graphics.clear();
+                this.graphics.beginPath();
+                this.graphics.moveTo(this.drawPoints[0].x, this.drawPoints[0].y);
+                for (let i = 1; i < this.drawPoints.length; i++) {
+                    this.graphics.lineTo(this.drawPoints[i].x, this.drawPoints[i].y);
+                }
+                this.graphics.strokePath();
+            }
+
+            createWallBody() {
+                // Remove previous wall if any
+                if (this.wallBody) {
+                    this.matter.world.remove(this.wallBody);
+                }
+
+                // Create individual segments
+                const parts = [];
+                const rectOptions = {
+                    friction: 1.0,
+                    restitution: 0.1,
+                    density: 0.1 // heavy wall
+                };
+
+                for (let i = 0; i < this.drawPoints.length - 1; i++) {
+                    const p1 = this.drawPoints[i];
+                    const p2 = this.drawPoints[i + 1];
+                    const cx = (p1.x + p2.x) / 2;
+                    const cy = (p1.y + p2.y) / 2;
+                    const dx = p2.x - p1.x;
+                    const dy = p2.y - p1.y;
+                    const angle = Math.atan2(dy, dx);
+                    const length = Math.sqrt(dx * dx + dy * dy) + LINE_THICKNESS;
+
+                    const body = this.matter.bodies.rectangle(cx, cy, length, LINE_THICKNESS, {
+                        ...rectOptions,
+                        angle: angle,
+                        label: 'wallSegment'
+                    });
+                    parts.push(body);
+                }
+
+                // If no parts, return
+                if (parts.length === 0) return;
+
+                // Create compound body
+                this.wallBody = this.matter.body.create({
+                    parts: parts,
+                    isStatic: false,
+                    label: 'wall',
+                    frictionAir: 0.05
+                });
+
+                // Setting collision group for all parts
+                const group = this.matter.world.nextGroup(false);
+                this.wallBody.collisionFilter.group = group;
+
+                this.matter.world.add(this.wallBody);
+            }
+
+            startGame() {
+                this.gameState = 'PLAYING';
+                this.input.enabled = false; // Disable drawing
+
+                this.timerText.setText(this.timeLeft.toString());
+
+                // Countdown timer
+                this.timerEvent = this.time.addEvent({
+                    delay: 1000,
+                    callback: this.tickTimer,
+                    callbackScope: this,
+                    loop: true
+                });
+
+                // Spawn Bees
+                this.beeSpawnEvent = this.time.addEvent({
+                    delay: BEE_SPAWN_INTERVAL,
+                    callback: this.spawnBee,
+                    callbackScope: this,
+                    loop: true
+                });
+            }
+
+            tickTimer() {
+                if (this.gameState !== 'PLAYING') return;
+
+                this.timeLeft--;
+                this.timerText.setText(this.timeLeft.toString());
+
+                if (this.timeLeft <= 0) {
+                    this.winGame();
+                }
+            }
+
+            spawnBee() {
+                if (this.gameState !== 'PLAYING') return;
+                if (this.bees.length >= MAX_BEES) return;
+
+                const hiveX = this.hive.x;
+                const hiveY = this.hive.y + 20;
+
+                // Simply use a Phaser Image for the bee so we manually control its x, y, ignoring matter.js physics engine entirely!
+                const bee = this.add.image(hiveX, hiveY, 'bee');
+                bee.setScale(0.1); // Scale down to 10%
+
+                // We will manually track its Velocity for our custom logic loop
+                bee.vx = Phaser.Math.FloatBetween(-2, 2);
+                bee.vy = Phaser.Math.FloatBetween(-2, 2);
+                bee.radius = Math.min(bee.width, bee.height) / 2 * 0.1 * 0.7;
+
+                this.bees.push(bee);
+            }
+
+            handleCollisions(event) {
+                // Since bees are no longer matter bodies, we handle their dog collisions manually in the update loop!
+            }
+
+            loseGame() {
+                if (this.gameState !== 'PLAYING') return;
+                this.gameState = 'LOST';
+
+                // Stop events
+                if (this.timerEvent) this.timerEvent.remove();
+                if (this.beeSpawnEvent) this.beeSpawnEvent.remove();
+
+                // Dog gets hurt
+                this.dog.setTexture('dog_hurt');
+
+                this.messageText.setText('GAME OVER!\nTap to Restart').setVisible(true);
+
+                // Enable click to restart
+                this.time.delayedCall(1000, () => {
+                    this.input.enabled = true;
+                    this.input.once('pointerdown', () => {
+                        this.scene.restart();
+                    });
+                });
+            }
+
+            winGame() {
+                if (this.gameState !== 'PLAYING') return;
+                this.gameState = 'WON';
+
+                // Stop events
+                if (this.timerEvent) this.timerEvent.remove();
+                if (this.beeSpawnEvent) this.beeSpawnEvent.remove();
+
+                this.messageText.setText('YOU WIN!\nTap to Restart').setVisible(true);
+                this.timerText.setText('0');
+
+                // Enable click to restart
+                this.time.delayedCall(1000, () => {
+                    this.input.enabled = true;
+                    this.input.once('pointerdown', () => {
+                        this.scene.restart();
+                    });
+                });
+            }
+
+            buildFlowField() {
+                const cellSize = 40;
+                const cols = Math.ceil(this.scale.width / cellSize);
+                const rows = Math.ceil(this.scale.height / cellSize);
+
+                if (!this.flowField) {
+                    this.flowField = new Array(cols).fill(0).map(() => new Array(rows).fill(null));
+                }
+                const costs = new Array(cols).fill(0).map(() => new Array(rows).fill(Infinity));
+                const gridCost = new Array(cols).fill(0).map(() => new Array(rows).fill(1));
+
+                // Mark obstacles with higher grid cost to encourage path routing around them
+                const bodies = this.matter.world.getAllBodies().filter(b => b.label === 'wallSegment' || b.label === 'floor');
+                for (let x = 0; x < cols; x++) {
+                    for (let y = 0; y < rows; y++) {
+                        const cx = x * cellSize + cellSize / 2;
+                        const cy = y * cellSize + cellSize / 2;
+
+                        // Check if center sits inside body bounds (approximate AABB check for performance)
+                        for (const body of bodies) {
+                            if (body.bounds && body.bounds.min.x <= cx && body.bounds.max.x >= cx &&
+                                body.bounds.min.y <= cy && body.bounds.max.y >= cy) {
+                                gridCost[x][y] = 20; // Obstacle penalty
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                const dogCol = Math.max(0, Math.min(cols - 1, Math.floor(this.dog.x / cellSize)));
+                const dogRow = Math.max(0, Math.min(rows - 1, Math.floor(this.dog.y / cellSize)));
+
+                costs[dogCol][dogRow] = 0;
+                this.flowField[dogCol][dogRow] = { x: 0, y: 0 };
+
+                // Queue for BFS
+                const queue = [{ x: dogCol, y: dogRow }];
+
+                const dirs = [
+                    { dx: 0, dy: -1 }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 },
+                    { dx: 1, dy: 1 }, { dx: -1, dy: -1 }, { dx: 1, dy: -1 }, { dx: -1, dy: 1 }
+                ];
+
+                // Use simple queue and update if cost is lower. Not strictly Dijkstra but works fine for small maps.
+                while (queue.length > 0) {
+                    // Extract min (simulate Priority Queue)
+                    let minIdx = 0;
+                    for (let i = 1; i < queue.length; i++) {
+                        if (costs[queue[i].x][queue[i].y] < costs[queue[minIdx].x][queue[minIdx].y]) {
+                            minIdx = i;
+                        }
+                    }
+                    const curr = queue.splice(minIdx, 1)[0];
+                    const currCost = costs[curr.x][curr.y];
+
+                    for (const d of dirs) {
+                        const nx = curr.x + d.dx;
+                        const ny = curr.y + d.dy;
+
+                        if (nx >= 0 && nx < cols && ny >= 0 && ny < rows) {
+                            const stepCost = (d.dx !== 0 && d.dy !== 0 ? 1.414 : 1) * gridCost[nx][ny];
+                            const newCost = currCost + stepCost;
+
+                            if (newCost < costs[nx][ny]) {
+                                costs[nx][ny] = newCost;
+                                queue.push({ x: nx, y: ny });
+
+                                // Flow gradient looks FROM neighbor TO current since BFS originates from Dog
+                                const dx = curr.x - nx;
+                                const dy = curr.y - ny;
+                                const len = Math.sqrt(dx * dx + dy * dy);
+                                this.flowField[nx][ny] = { x: dx / len, y: dy / len };
+                            }
+                        }
+                    }
+                }
+            }
+
+            update(time, delta) {
+                if (this.gameState === 'PLAYING' || this.gameState === 'LOST') {
+                    // Sync drawn graphics to actual physical body position and rotation
+                    if (this.wallBody && this.graphics) {
+                        this.graphics.clear();
+                        this.graphics.lineStyle(LINE_THICKNESS, 0x222222, 1);
+
+                        this.graphics.fillStyle(0x222222);
+                        const parts = this.wallBody.parts;
+                        for (let i = 1; i < parts.length; i++) {
+                            const part = parts[i];
+                            this.graphics.beginPath();
+                            this.graphics.moveTo(part.vertices[0].x, part.vertices[0].y);
+                            for (let j = 1; j < part.vertices.length; j++) {
+                                this.graphics.lineTo(part.vertices[j].x, part.vertices[j].y);
+                            }
+                            this.graphics.closePath();
+                            this.graphics.fillPath();
+                        }
+                    }
+
+                    // Rebuild flow field roughly every 150ms
+                    if (!this.lastFlowUpdate || time - this.lastFlowUpdate > 150) {
+                        this.buildFlowField();
+                        this.lastFlowUpdate = time;
+                    }
+
+                    if (!this.flowField) return;
+
+                    const cellSize = 40;
+                    const dogPos = new Phaser.Math.Vector2(this.dog.x, this.dog.y);
+
+                    this.bees.forEach(bee => {
+                        if (bee.active) {
+                            const bx = bee.x;
+                            const by = bee.y;
+
+                            const col = Math.max(0, Math.min(this.flowField.length - 1, Math.floor(bx / cellSize)));
+                            const row = Math.max(0, Math.min(this.flowField[0].length - 1, Math.floor(by / cellSize)));
+
+                            let flowDir = this.flowField[col][row];
+                            let dir = null;
+
+                            if (!flowDir) {
+                                // Fallback direct steering
+                                const beePos = new Phaser.Math.Vector2(bx, by);
+                                dir = dogPos.clone().subtract(beePos).normalize();
+                            } else {
+                                dir = new Phaser.Math.Vector2(flowDir.x, flowDir.y);
+                            }
+
+                            // Slight randomness
+                            dir.x += Phaser.Math.FloatBetween(-0.1, 0.1);
+                            dir.y += Phaser.Math.FloatBetween(-0.1, 0.1);
+                            dir.normalize();
+
+                            // Flow Field A* alternative: Direct velocity override for absolute control
+                            const maxSpeed = 2.5; // Constant flight speed
+
+                            // Interpolate velocity for smoother turning
+                            const targetVx = dir.x * maxSpeed;
+                            const targetVy = dir.y * maxSpeed;
+
+                            bee.vx = bee.vx * 0.95 + targetVx * 0.05;
+                            bee.vy = bee.vy * 0.95 + targetVy * 0.05;
+
+                            // Apply manual movement
+                            bee.x += bee.vx;
+                            bee.y += bee.vy;
+
+                            // Custom Collision Check: Bee vs Dog
+                            // The dog is still a matter.js body, so we check distance to its center
+                            const dogRad = Math.min(this.dog.width, this.dog.height) / 2 * 0.1 * 0.8;
+                            const distSq = (bee.x - this.dog.x) ** 2 + (bee.y - this.dog.y) ** 2;
+                            const minRadiusCollision = (bee.radius + dogRad) ** 2;
+
+                            if (distSq < minRadiusCollision) {
+                                this.loseGame();
+                            }
+                        }
+                    });
+                }
+            }
+        }
+
+        const config = {
+            type: Phaser.AUTO,
+            parent: 'game-container',
+            width: 800,
+            height: 600,
+            scale: {
+                mode: Phaser.Scale.FIT,
+                autoCenter: Phaser.Scale.CENTER_BOTH
+            },
+            physics: {
+                default: 'matter',
+                matter: {
+                    gravity: { y: 1 },
+                    enableSleep: false,
+                    debug: false
+                }
+            },
+            scene: GameScene,
+            backgroundColor: '#87CEEB'
+        };
+
+        const game = new Phaser.Game(config);
+
+    </script>
+</body>
+
+</html>
