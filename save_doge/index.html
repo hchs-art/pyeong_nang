@@ -118,14 +118,10 @@
                     align: 'center'
                 }).setOrigin(0.5);
 
-                // Enable click to restart
-                this.time.delayedCall(1000, () => {
-                    this.input.enabled = true;
-                    this.input.once('pointerdown', () => {
-                        this.cleanupScene();
-                        this.scene.restart();
-                    });
-                });
+                // Input handling
+                this.input.on('pointerdown', this.onPointerDown, this);
+                this.input.on('pointermove', this.onPointerMove, this);
+                this.input.on('pointerup', this.onPointerUp, this);
 
                 // Also ensure cleanup on manual restarts just in case
                 this.events.on('shutdown', this.cleanupScene, this);
@@ -145,14 +141,6 @@
                 this.bees = [];
                 this.drawPoints = [];
                 this.isDrawing = false;
-            }
-
-            onPointerDown(pointer) {
-                this.input.on('pointermove', this.onPointerMove, this);
-                this.input.on('pointerup', this.onPointerUp, this);
-
-                // Collision Event
-                this.matter.world.on('collisionstart', this.handleCollisions, this);
             }
 
             onPointerDown(pointer) {
@@ -498,6 +486,51 @@
 
                             bee.vx = bee.vx * 0.95 + targetVx * 0.05;
                             bee.vy = bee.vy * 0.95 + targetVy * 0.05;
+
+                            // Custom Collision Check against Wall (Line Segments)
+                            if (this.wallBody && this.drawPoints.length > 1) {
+                                for (let i = 0; i < this.drawPoints.length - 1; i++) {
+                                    const p1 = this.drawPoints[i];
+                                    const p2 = this.drawPoints[i + 1];
+
+                                    // Math for distance from point to line segment
+                                    const l2 = (p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2;
+                                    let t = 0;
+                                    if (l2 !== 0) {
+                                        t = Math.max(0, Math.min(1, ((bee.x - p1.x) * (p2.x - p1.x) + (bee.y - p1.y) * (p2.y - p1.y)) / l2));
+                                    }
+                                    const projX = p1.x + t * (p2.x - p1.x);
+                                    const projY = p1.y + t * (p2.y - p1.y);
+
+                                    const distToLineSq = (bee.x - projX) ** 2 + (bee.y - projY) ** 2;
+                                    // Collision threshold is bee radius + half line thickness
+                                    const colRadius = bee.radius + LINE_THICKNESS / 2;
+
+                                    if (distToLineSq < colRadius ** 2 && distToLineSq > 0) {
+                                        // Push bee out cleanly
+                                        const dist = Math.sqrt(distToLineSq);
+                                        const pushX = (bee.x - projX) / dist;
+                                        const pushY = (bee.y - projY) / dist;
+                                        const overlap = colRadius - dist;
+                                        bee.x += pushX * overlap;
+                                        bee.y += pushY * overlap;
+
+                                        // Simple reflection of intent
+                                        const dot = bee.vx * pushX + bee.vy * pushY;
+                                        if (dot < 0) {
+                                            bee.vx -= 2 * dot * pushX;
+                                            bee.vy -= 2 * dot * pushY;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Custom Collision Check against Floor
+                            const floorSurfaceY = this.scale.height - 40; // Floor height is 40, Y is centered at height-20 so top is height-40
+                            if (bee.y + bee.radius > floorSurfaceY) {
+                                bee.y = floorSurfaceY - bee.radius;
+                                if (bee.vy > 0) bee.vy *= -0.5;
+                            }
 
                             // Apply manual movement
                             bee.x += bee.vx;
